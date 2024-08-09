@@ -9,8 +9,7 @@ class ProserverCli < Formula
 
   def install
     bin.install "proserver"
-    ("proserver").install_symlink "vpro"
+    #("proserver").install_symlink "vpro"
   end
 
 end
-
