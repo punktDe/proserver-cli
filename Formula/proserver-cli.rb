@@ -5,7 +5,7 @@ class ProserverCli < Formula
 
   head "https://github.com/punktDe/proserver-cli", :using => :git, :branch => "main"
 
-  url "https://github.com/punktDe/proserver-cli", :using => :git, :tag => "1.0.0"
+  url "https://github.com/punktDe/proserver-cli", :using => :git, :tag => "1.0.1"
 
   def install
     bin.install "proserver"
