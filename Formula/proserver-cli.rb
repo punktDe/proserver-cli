@@ -1,5 +1,5 @@
-# ansible-init.rb
-class AnsibleInit < Formula
+# proserver-cli.rb
+class ProserverCli < Formula
   desc "A bash script originally written by @fnkr that lets you connect to Punkt.de Proservers"
   homepage "https://punkt.de"
 

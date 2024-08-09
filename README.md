@@ -5,8 +5,8 @@ Originally written by @fnkr
 
 ## Installation
 ```bash
-brew tap pt/proserver-cli https://github.com/punktDe/proserver-cli.git
-brew install pt/proserver-cli
+brew tap pt/proserver https://github.com/punktDe/proserver-cli.git
+brew install pt/proserver/proserver-cli
 ```
 
 ## Usage
