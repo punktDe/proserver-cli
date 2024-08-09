@@ -1,0 +1,261 @@
+#!/usr/bin/env bash
+set -e -u -o pipefail
+
+script="$(basename -- "$0")"
+verbose=
+dry_run=
+identify=
+identify_host=
+jumphost=
+nojumphost=
+copy_id=
+copy_id_from=
+scp=
+src_path=
+dest_path=
+login=""
+ssh_opts=()
+ipversion=
+
+print_help() {
+    echo "usage: $script [-h|--help] [-v|--verbose] [-n|--dry-run] [[-i|--identify]|[-H|--get-hostname]] [[-j|--jumphost]|[-J|--no-jumphost]] [[--scp]|[-a[=FILE|=URL]|--copy-id[=FILE|=URL]]] PROSERVER[:SRCPATH] [DESTPATH] [SSH ARGS]"
+}
+
+if [ $# -eq 0 ]; then
+    print_help
+    exit 1
+fi
+
+run() {
+    "$@"
+}
+
+get_proserver_ip() {
+    local domain="$1"
+    dig +short "$domain" AAAA "$domain" A | grep -v -i -e '\.$' -e ^2a00:b580:a000: | head -n 1
+}
+
+for param in "$@"; do
+    if [ -z "$login" ]; then
+        if [ "$param" = "--help" ] || [ "$param" = "-h" ]; then
+            print_help
+            exit 1
+        elif [ "$param" = "--verbose" ] || [[ "$param" = "-v" ]]; then
+            verbose=1
+            [ -z "$dry_run" ] && run() { printf -- "$*\n"; "$@"; }
+        elif [ "$param" = "--dry-run" ] || [ "$param" = "-n" ]; then
+            dry_run=1
+            unset -f run
+            run() { printf -- "$*\n"; }
+        elif [ "$param" = "--identify" ] || [[ "$param" = "-i" ]]; then
+            identify=1
+        elif [ "$param" = "--get-hostname" ] || [[ "$param" = "-H" ]]; then
+            identify_host=1
+        elif [ "$param" = "--jumphost" ] || [[ "$param" = "-j" ]]; then
+            jumphost=1
+        elif [ "$param" = "--no-jumphost" ] || [[ "$param" = "-J" ]]; then
+            nojumphost=1
+        elif [ "$param" = "--copy-id" ] || [[ "$param" = "-a" ]]; then
+            copy_id=1
+        elif [[ "$param" = "--copy-id="* ]]; then
+            copy_id_from="${param#--copy-id=}"
+            copy_id=1
+        elif [[ "$param" = "-a="* ]]; then
+            copy_id_from="${param#-a=}"
+            copy_id=1
+        elif [ "$param" = "--scp" ]; then
+            scp=1
+        elif [ -z "$login" ]; then
+            login="$param"
+        fi
+    else
+        if [ -n "$scp" ] && [ -z "$identify" ] && [ -z "$dest_path" ]; then
+            dest_path="$param"
+        else
+            ssh_opts+=("$param")
+        fi
+    fi
+done
+
+if [ -n "$identify" ] && [ -n "$identify_host" ]; then
+    print_help
+    exit 1
+fi
+
+proserver="${login##*@}"
+proserver_user="${login%%@*}"
+proserver_ssh_port=22
+public_suffix_list=~/.proserver-public-suffix-list.v1.dat
+
+if [ -n "$scp" ]; then
+    src_path="${proserver##*:}"
+    proserver="${proserver%:*}"
+fi
+
+if [ -n "$scp" ] && ([ -z "$src_path" ] || ([ -z "$identify" ] && [ -z "$dest_path" ]) || [ -n "$copy_id" ]); then
+    print_help
+    exit 1
+fi
+
+get_proserver_override() {
+    local option="$1"
+    local key="$2"
+    value="$(dig +short -t txt "${key}.${option}.proserver-whois.punkt.app")"
+    value="${value%\"}"
+    value="${value#\"}"
+    [ -n "$verbose" ] && printf -- "${key}.${option}.proserver-whois.punkt.app=${value}\n" >&2
+    printf -- "$value\n"
+}
+
+if [[ "$proserver" =~ ^(vpro)?[0-9]+$ ]]; then
+    proserver_id="${proserver#vpro}"
+    proserver_id="$(printf -- "$proserver_id" | sed 's/^[0]*//')"
+    proserver_id="vpro$(printf '%.4d' "$proserver_id")"
+    proserver_fqdn="${proserver_id%.}.proserver.punkt.de"
+    proserver="$proserver_fqdn"
+
+    proserver_fqdn_override="$(get_proserver_override fqdn "$proserver")"
+    if [ -n "$proserver_fqdn_override" ]; then
+        proserver_fqdn="$proserver_fqdn_override"
+    fi
+elif [[ "$proserver" = *.* ]] || [[ "$proserver" = *:* ]]; then
+    if [ ! -f "$public_suffix_list" ] || [ ! -z "$(find "$public_suffix_list" -mtime +60 -print 2>/dev/null)" ]; then
+        curl -s https://publicsuffix.org/list/public_suffix_list.dat | \
+        grep -v -e '^//' -e '^[\\t\\w]*$' | \
+        while read line; do echo "\.${line##*.}$"; done | sort | uniq | \
+        tee "$public_suffix_list" >/dev/null
+    fi
+    if printf -- "$proserver" | grep -v --file="$public_suffix_list" >/dev/null; then
+        proserver="${proserver%.punkt.hosting}.punkt.hosting"
+    fi
+
+    proserver_fqdn_override="$(get_proserver_override fqdn "${proserver//:/.}")"
+    if [ -n "$proserver_fqdn_override" ]; then
+        proserver_fqdn="$proserver_fqdn_override"
+    else
+        if [[ "$proserver" = *:* ]] || ! proserver_ip="$(get_proserver_ip "$proserver")"; then
+            proserver_ip="${proserver%.punkt.hosting}"
+        fi
+        proserver_fqdn="$(dig +short -x "$proserver_ip")"
+        proserver_fqdn="${proserver_fqdn%.}"
+    fi
+    proserver_id="${proserver_fqdn%%.*}"
+fi
+
+if [ -z "${proserver_fqdn:-}" ]; then
+    print_help
+    exit 1
+fi
+
+proserver_id_override="$(get_proserver_override id "$proserver_fqdn")"
+[ -n "$proserver_id_override" ] && proserver_id="$proserver_id_override"
+
+proserver_ssh_port_override="$(get_proserver_override ssh-port "$proserver_fqdn")"
+[ -n "$proserver_ssh_port_override" ] && proserver_ssh_port="$proserver_ssh_port_override"
+
+proserver_admin_user_override="$(get_proserver_override admin-user "$proserver_fqdn")"
+
+if [ "$proserver_user" = "$login" ]; then
+    proserver_user="${proserver_admin_user_override:-$proserver_id}"
+fi
+
+proserver_ip="$(get_proserver_ip "$proserver_fqdn")"
+
+if [[ "$proserver_ip" = *":"* ]]; then
+    if command -v ping6 >/dev/null; then
+        if ! ping6 -c 1 "$proserver_ip" >/dev/null 2>&1; then
+            [ -n "$nojumphost" ] || jumphost=1
+        fi
+    elif command -v ip >/dev/null; then
+        if ! ip route get "$proserver_ip" >/dev/null 2>&1; then
+            [ -n "$nojumphost" ] || jumphost=1
+        fi
+    fi
+    ipversion=6
+fi
+
+if [ -n "$identify" ] || [ -n "$identify_host" ]; then
+    if [ -z "$identify_host" ]; then
+        printf -- "${proserver_user}@"
+    fi
+    printf -- "${proserver_fqdn}"
+    if [ ! "$proserver_ssh_port" -eq 22 ] && [ -z "$identify_host" ]; then
+        if [ -n "$scp" ]; then
+            printf -- ":${proserver_ssh_port}"
+        else
+            printf -- " -p ${proserver_ssh_port}"
+        fi
+    fi
+    printf -- "\n"
+    exit 0
+fi
+
+cmd=(run)
+
+if [ -n "$scp" ]; then
+    cmd+=(scp -P "$proserver_ssh_port")
+else
+    if [ -n "$copy_id" ]; then
+        cmd+=(ssh-copy-id)
+    else
+        cmd+=(ssh)
+    fi
+    cmd+=(-p "$proserver_ssh_port")
+fi
+
+if [ -n "$jumphost" ]; then
+    cmd+=(-J jumping@ssh-jumphost.karlsruhe.punkt.de)
+fi
+
+if [ -n "$ipversion" ]; then
+    cmd+=("-${ipversion}")
+fi
+
+copy_id_file=
+copy_id_tmpfile=
+if [ -n "$copy_id_from" ]; then
+    if [ -f "$copy_id_from" ]; then
+        copy_id_file="$copy_id_from"
+    else
+        if [[ "$copy_id_from" = "http://"* ]] || [[ "$copy_id_from" = "https://"* ]]; then
+            copy_id_url="$copy_id_from"
+        else
+            copy_id_url="https://inventory.punkt.app/files/public_keys/${copy_id_from}.pub"
+        fi
+        copy_id_file="$(mktemp -- "${TMPDIR:-/tmp}/XXXXXXXXX.pub")"
+        copy_id_tmpfile=1
+        if ! curl -s -o "$copy_id_file" "$copy_id_url"; then
+            echo "${script}: error: could not download public key from \"${copy_id_url}\""
+        fi
+    fi
+    cmd+=(-f -i "$copy_id_file")
+fi
+
+if [ -n "$scp" ]; then
+    if [ "$dest_path" = "-" ]; then
+        dest_path=/dev/stdout
+        cmd+=(-q)
+    elif [[   "$dest_path" = *":"* ]] \
+      && [[ ! "$dest_path" = "./"* ]] \
+      && [[ ! "$dest_path" = "../"* ]] \
+      && [[ ! "$dest_path" = "/"* ]]; then
+        dest_path="$("$0" --scp --identify "${dest_path%:*}"):${dest_path##*:}"
+    fi
+    cmd+=("${proserver_user}@${proserver_fqdn}:${src_path}" "$dest_path")
+else
+    if [ "${#ssh_opts[@]}" -gt 0 ] && [ -n "$copy_id" ]; then
+        cmd+=("${ssh_opts[@]}")
+    fi
+
+    cmd+=("${proserver_user}@${proserver_fqdn}")
+fi
+
+if [ "${#ssh_opts[@]}" -gt 0 ] && [ -z "$copy_id" ]; then
+    cmd+=("${ssh_opts[@]}")
+fi
+
+"${cmd[@]}"
+
+if [ -n "$copy_id_tmpfile" ]; then
+    rm -- "$copy_id_file"
+fi
