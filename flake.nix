@@ -10,7 +10,6 @@
       pkgs = import nixpkgs {
         system = system;
       };
-      lib = nixpkgs.lib;
     in
     {
       packages = {
