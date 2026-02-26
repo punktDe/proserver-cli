@@ -4,24 +4,11 @@
     flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = { self, nixpkgs, flake-utils }: {
-    overlays.default = final: prev: {
-      proserver-cli = final.callPackage
-        ({ stdenv, pkgs, ... }:
-          stdenv.mkDerivation {
-            src = ./.;
-            pname = "proserver-cli";
-            version = "1.0.1";
-          }
-        )
-        { };
-    };
-  } //
+  outputs = { self, nixpkgs, flake-utils }: { } //
   (flake-utils.lib.eachDefaultSystem (system:
     let
       pkgs = import nixpkgs {
         system = system;
-        overlays = [ self.overlays.default ];
       };
       lib = nixpkgs.lib;
     in
