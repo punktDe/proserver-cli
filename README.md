@@ -22,5 +22,5 @@ vpro 9999
 
 ## Nix
 ```bash
-nix run github.com:punktDe/proserver-cli
+nix run github:punktDe/proserver-cli
 ```
