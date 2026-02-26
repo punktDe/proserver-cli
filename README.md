@@ -19,3 +19,8 @@ proserver 9999
 # or
 vpro 9999
 ```
+
+## Nix
+```bash
+nix run github.com:punktDe/proserver-cli
+```
